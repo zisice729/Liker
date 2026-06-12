@@ -1,0 +1,140 @@
+
+server:
+  port: 8080
+
+spring:
+  application:
+    name: liker-system
+  
+  # Redis配置
+  redis:
+    host: localhost
+    port: 6379
+    database: 0
+    timeout: 10000ms
+    lettuce:
+      pool:
+        max-active: 200
+        max-idle: 50
+        min-idle: 10
+        max-wait: 10000ms
+  
+  # Kafka配置
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: 1
+      retries: 2
+      batch-size: 16384
+      linger-ms: 10
+      buffer-memory: 33554432
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      group-id: like-consumer-group
+      auto-offset-reset: latest
+      enable-auto-commit: true
+      auto-commit-interval-ms: 100
+      max-poll-records: 50
+      properties:
+        spring.json.trusted.packages: com.example.liker.entity
+  
+  # 数据源配置（Sharding-JDBC）
+  shardingsphere:
+    datasource:
+      names: ds0, ds1
+      ds0:
+        type: com.zaxxer.hikari.HikariDataSource
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        jdbc-url: jdbc:mysql://localhost:3306/example_db_0?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+        username: root
+        password: password
+      ds1:
+        type: com.zaxxer.hikari.HikariDataSource
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        jdbc-url: jdbc:mysql://localhost:3306/example_db_1?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+        username: root
+        password: password
+    rules:
+      sharding:
+        tables:
+          user_like:
+            actual-data-nodes: ds${0..1}.user_like_${0..127}
+            database-strategy:
+              standard:
+                sharding-column: biz_type
+                sharding-algorithm-name: database-inline
+            table-strategy:
+              standard:
+                sharding-column: biz_id
+                sharding-algorithm-name: table-inline
+        sharding-algorithms:
+          database-inline:
+            type: INLINE
+            props:
+              algorithm-expression: ds${biz_type % 2}
+          table-inline:
+            type: INLINE
+            props:
+              algorithm-expression: user_like_${biz_id % 128}
+
+# MyBatis-Plus配置
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.example.liker.entity
+
+# Redisson配置
+redisson:
+  address: redis://localhost:6379
+  timeout: 10000
+  connection-pool-size: 10
+  connection-min-idle-size: 5
+
+# 日志配置
+logging:
+  level:
+    com.example.liker: DEBUG
+    org.apache.kafka: WARN
+    org.redisson: WARN
+
+# XXL-Job配置
+xxl:
+  job:
+    admin:
+      addresses: http://localhost:8080/xxl-job-admin
+    executor:
+      appname: liker-job-executor
+      ip:
+      port: 9999
+      logpath: ./data/applogs/xxl-job/jobhandler
+      logretentiondays: 30
+    accessToken:
+
+# 自定义配置
+liker:
+  cache:
+    caffeine:
+      max-size: 100000
+      expire-after-write-ms: 100
+      empty-value-expire-minutes: 5
+  rate-limit:
+    user-limit-count: 5
+    user-limit-seconds: 1
+  kafka:
+    topic: topic_like
+    retry:
+      max-attempts: 4
+      initial-delay-ms: 200
+      multiplier: 2.0
+      max-delay-ms: 5000
+  task:
+    compensate:
+      batch-size: 300
+      max-retry: 8
+    reconcile:
+      lock-duration-ms: 60000

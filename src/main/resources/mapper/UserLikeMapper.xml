@@ -1,0 +1,30 @@
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.liker.mapper.UserLikeMapper">
+
+    <insert id="insertOrUpdate">
+        INSERT INTO user_like (biz_type, biz_id, user_id, operate_type, operate_time)
+        VALUES (#{record.bizType}, #{record.bizId}, #{record.userId}, #{record.operateType}, #{record.operateTime})
+        ON DUPLICATE KEY UPDATE
+        operate_type = #{record.operateType},
+        operate_time = #{record.operateTime}
+    </insert>
+
+    <select id="countValidLikes" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM user_like
+        WHERE biz_type = #{bizType} AND biz_id = #{bizId} AND operate_type = 1
+    </select>
+
+    <insert id="batchInsert">
+        INSERT INTO user_like (biz_type, biz_id, user_id, operate_type, operate_time)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.bizType}, #{item.bizId}, #{item.userId}, #{item.operateType}, #{item.operateTime})
+        </foreach>
+        ON DUPLICATE KEY UPDATE
+        operate_type = VALUES(operate_type),
+        operate_time = VALUES(operate_time)
+    </insert>
+
+</mapper>
