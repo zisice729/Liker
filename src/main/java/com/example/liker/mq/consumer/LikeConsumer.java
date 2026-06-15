@@ -6,8 +6,9 @@ import com.example.liker.mapper.LikeCompensateMapper;
 import com.example.liker.mapper.LikesRecordMapper;
 import com.example.liker.mq.dto.LikeKafkaMsg;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -16,14 +17,20 @@ import org.springframework.stereotype.Component;
  * Kafka消息消费者
  * 负责消费点赞消息并持久化到MySQL
  */
-@Slf4j
 @Component
-@RequiredArgsConstructor
 public class LikeConsumer {
+
+    private static final Logger log = LoggerFactory.getLogger(LikeConsumer.class);
 
     private final LikesRecordMapper recordMapper;
     private final LikeCompensateMapper compensateMapper;
     private final ObjectMapper objectMapper;
+
+    public LikeConsumer(LikesRecordMapper recordMapper, LikeCompensateMapper compensateMapper, ObjectMapper objectMapper) {
+        this.recordMapper = recordMapper;
+        this.compensateMapper = compensateMapper;
+        this.objectMapper = objectMapper;
+    }
 
     /**
      * 监听点赞消息Topic
@@ -35,7 +42,7 @@ public class LikeConsumer {
     @KafkaListener(topics = "topic_like")
     public void listen(org.apache.kafka.clients.consumer.ConsumerRecords<String, LikeKafkaMsg> records, 
                        Acknowledgment ack) {
-        for (var record : records) {
+        for (ConsumerRecord<String, LikeKafkaMsg> record : records) {
             LikeKafkaMsg msg = record.value();
             try {
                 // 构建持久化记录
