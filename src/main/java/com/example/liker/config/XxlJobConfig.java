@@ -1,16 +1,14 @@
-
 package com.example.liker.config;
 
 import com.xxl.job.core.executor.impl.XxlJobSpringExecutor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * XXL-Job配置类
+ * XXL-Job 客户端配置类
+ * 配置XXL-Job执行器，替换Spring原生@Scheduled定时任务
  */
-@Slf4j
 @Configuration
 public class XxlJobConfig {
 
@@ -20,37 +18,27 @@ public class XxlJobConfig {
     @Value("${xxl.job.executor.appname}")
     private String appName;
 
-    @Value("${xxl.job.executor.ip:}")
-    private String ip;
-
-    @Value("${xxl.job.executor.port:9999}")
+    @Value("${xxl.job.executor.port}")
     private int port;
 
-    @Value("${xxl.job.accessToken:}")
-    private String accessToken;
-
-    @Value("${xxl.job.executor.logpath:./data/applogs/xxl-job/jobhandler}")
+    @Value("${xxl.job.executor.logpath}")
     private String logPath;
 
-    @Value("${xxl.job.executor.logretentiondays:30}")
+    @Value("${xxl.job.executor.logretentiondays}")
     private int logRetentionDays;
 
     /**
-     * 注册XXL-Job执行器
+     * 配置XXL-Job执行器Bean
+     * @return XxlJobSpringExecutor实例
      */
     @Bean
     public XxlJobSpringExecutor xxlJobExecutor() {
-        log.info(">>>>>>>>>>> xxl-job config init.");
-        
-        XxlJobSpringExecutor xxlJobSpringExecutor = new XxlJobSpringExecutor();
-        xxlJobSpringExecutor.setAdminAddresses(adminAddresses);
-        xxlJobSpringExecutor.setAppname(appName);
-        xxlJobSpringExecutor.setIp(ip);
-        xxlJobSpringExecutor.setPort(port);
-        xxlJobSpringExecutor.setAccessToken(accessToken);
-        xxlJobSpringExecutor.setLogPath(logPath);
-        xxlJobSpringExecutor.setLogRetentionDays(logRetentionDays);
-
-        return xxlJobSpringExecutor;
+        XxlJobSpringExecutor executor = new XxlJobSpringExecutor();
+        executor.setAdminAddresses(adminAddresses);
+        executor.setAppname(appName);
+        executor.setPort(port);
+        executor.setLogPath(logPath);
+        executor.setLogRetentionDays(logRetentionDays);
+        return executor;
     }
 }

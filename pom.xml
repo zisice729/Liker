@@ -57,14 +57,7 @@
             <artifactId>mybatis-plus-boot-starter</artifactId>
             <version>${mybatis-plus.version}</version>
         </dependency>
-        
-        <!-- Sharding-JDBC -->
-        <dependency>
-            <groupId>org.apache.shardingsphere</groupId>
-            <artifactId>shardingsphere-jdbc-core-spring-boot-starter</artifactId>
-            <version>${shardingsphere.version}</version>
-        </dependency>
-        
+
         <!-- Redisson -->
         <dependency>
             <groupId>org.redisson</groupId>

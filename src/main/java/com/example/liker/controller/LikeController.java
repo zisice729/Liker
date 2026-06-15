@@ -1,25 +1,14 @@
-
 package com.example.liker.controller;
 
-import com.example.liker.dto.request.LikeCheckRequest;
-import com.example.liker.dto.request.LikeCountRequest;
-import com.example.liker.dto.request.LikeOperateRequest;
-import com.example.liker.dto.response.ApiResponse;
-import com.example.liker.dto.response.LikeCheckResponse;
-import com.example.liker.dto.response.LikeCountResponse;
-import com.example.liker.dto.response.LikeOperateResponse;
 import com.example.liker.service.LikeService;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 /**
  * 点赞控制器
- * 职责：接收请求、参数校验、调用Service、返回响应
+ * 提供点赞相关的REST API接口
  */
-@Slf4j
 @RestController
 @RequestMapping("/api/like")
 @RequiredArgsConstructor
@@ -28,32 +17,37 @@ public class LikeController {
     private final LikeService likeService;
 
     /**
-     * 点赞/取消点赞接口
+     * 执行点赞/取消点赞操作
+     *
+     * @param objId 业务对象ID（文章/评论）
+     * @param userId 用户ID
+     * @return 最新点赞数
      */
     @PostMapping("/operate")
-    public ResponseEntity<ApiResponse<LikeOperateResponse>> doLike(@Valid @RequestBody LikeOperateRequest request) {
-        log.info("收到点赞请求: {}", request);
-        LikeOperateResponse response = likeService.doLike(request);
-        return ResponseEntity.ok(ApiResponse.success(response));
+    public ResponseEntity<Long> operate(@RequestParam Long objId, @RequestParam Long userId) {
+        return ResponseEntity.ok(likeService.operateLike(objId, userId));
     }
 
     /**
-     * 获取点赞数量接口
+     * 获取指定对象的点赞数
+     *
+     * @param objId 业务对象ID
+     * @return 点赞数量
      */
-    @PostMapping("/count")
-    public ResponseEntity<ApiResponse<LikeCountResponse>> getLikeCount(@Valid @RequestBody LikeCountRequest request) {
-        log.info("收到获取点赞数量请求: {}", request);
-        LikeCountResponse response = likeService.getLikeCount(request);
-        return ResponseEntity.ok(ApiResponse.success(response));
+    @GetMapping("/count")
+    public ResponseEntity<Long> getCount(@RequestParam Long objId) {
+        return ResponseEntity.ok(likeService.getLikeCount(objId));
     }
 
     /**
-     * 检查用户点赞状态接口
+     * 检查用户是否已点赞指定对象
+     *
+     * @param objId 业务对象ID
+     * @param userId 用户ID
+     * @return true-已点赞，false-未点赞
      */
-    @PostMapping("/check")
-    public ResponseEntity<ApiResponse<LikeCheckResponse>> checkUserLiked(@Valid @RequestBody LikeCheckRequest request) {
-        log.info("收到检查点赞状态请求: {}", request);
-        LikeCheckResponse response = likeService.checkUserLiked(request);
-        return ResponseEntity.ok(ApiResponse.success(response));
+    @GetMapping("/check")
+    public ResponseEntity<Boolean> check(@RequestParam Long objId, @RequestParam Long userId) {
+        return ResponseEntity.ok(likeService.checkUserLiked(objId, userId));
     }
 }

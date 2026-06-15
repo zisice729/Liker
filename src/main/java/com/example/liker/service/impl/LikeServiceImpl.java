@@ -1,217 +1,119 @@
-
 package com.example.liker.service.impl;
 
-import com.example.liker.config.RedisConfig;
-import com.example.liker.common.constants.LikeConstant;
-import com.example.liker.common.exception.BusinessException;
-import com.example.liker.common.util.RedisLikeUtil;
-import com.example.liker.common.util.RedisRateLimiter;
-import com.example.liker.dto.request.LikeCheckRequest;
-import com.example.liker.dto.request.LikeCountRequest;
-import com.example.liker.dto.request.LikeOperateRequest;
-import com.example.liker.dto.response.LikeCheckResponse;
-import com.example.liker.dto.response.LikeCountResponse;
-import com.example.liker.dto.response.LikeOperateResponse;
-import com.example.liker.mq.msg.LikeMqMsg;
-import com.example.liker.mq.producer.KafkaProducerServiceImpl;
+import com.example.liker.constant.CommonConst;
+import com.example.liker.constant.RedisKeyConst;
+import com.example.liker.entity.LikesRecord;
+import com.example.liker.mapper.LikesRecordMapper;
+import com.example.liker.mq.dto.LikeKafkaMsg;
+import com.example.liker.mq.producer.LikeProducer;
 import com.example.liker.service.LikeService;
-import com.github.benmanes.caffeine.cache.Cache;
+import com.example.liker.util.ShardUtil;
+import com.github.benmanes.caffeine.cache.LoadingCache;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
-import org.springframework.util.ObjectUtils;
+
+import java.util.Arrays;
 
 /**
  * 点赞服务实现类
- * 职责：业务编排、流程控制、调用原子方法
+ * 核心业务逻辑：
+ * 1. 使用Redis作为主存储，保证高并发读写
+ * 2. 使用Lua脚本实现原子化点赞/取消操作
+ * 3. Caffeine本地缓存+Redis Pub/Sub实现集群缓存一致性
+ * 4. Kafka异步消息实现最终一致性
+ * 5. Redis故障时降级到MySQL
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class LikeServiceImpl implements LikeService {
 
-    private final RedisLikeUtil redisLikeUtil;
-    private final RedisRateLimiter redisRateLimiter;
-    private final KafkaProducerServiceImpl kafkaProducerService;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final DefaultRedisScript<Long> likeOperateScript;
+    private final LoadingCache<String, Long> likeCountCache;
+    private final ShardUtil shardUtil;
+    private final LikeProducer likeProducer;
+    private final LikesRecordMapper recordMapper;
 
-    @Qualifier("likeCountCache")
-    private final Cache<String, Long> likeCountCache;
-
-    @Qualifier("emptyValueCache")
-    private final Cache<String, Boolean> emptyValueCache;
-
-    @Value("${liker.rate-limit.user-limit-count:5}")
-    private int userLimitCount;
-
-    @Value("${liker.rate-limit.user-limit-seconds:1}")
-    private int userLimitSeconds;
-
+    /**
+     * 执行点赞/取消点赞操作
+     * 流程：计算分片 -> 执行Lua脚本 -> 失效缓存 -> 发送Kafka消息
+     *
+     * @param objId 业务对象ID（文章/评论）
+     * @param userId 用户ID
+     * @return 最新点赞数
+     */
     @Override
-    public LikeOperateResponse doLike(LikeOperateRequest request) {
-        log.debug("开始处理点赞请求: {}", request);
+    public Long operateLike(Long objId, Long userId) {
+        // 1. 计算用户分片索引
+        int shardIdx = shardUtil.getShardIndex(userId);
+        
+        // 2. 构建Redis Key
+        String countKey = String.format(RedisKeyConst.LIKE_COUNT_KEY, objId);
+        String setKey = String.format(RedisKeyConst.LIKE_SET_KEY, objId, shardIdx);
 
-        validateOperateRequest(request);
-        checkRateLimit(request.getUserId());
+        // 3. 执行Lua脚本（原子操作）
+        Long newCount = redisTemplate.execute(
+                likeOperateScript,
+                Arrays.asList(countKey, setKey),
+                userId.toString()
+        );
 
-        Long operateResult = executeLikeOperation(request);
-        long likeCount = getLikeCountFromRedis(request.getBizType(), request.getBizId());
+        // 4. 失效本地缓存并广播通知集群
+        likeCountCache.invalidate(countKey);
+        redisTemplate.convertAndSend(CommonConst.CACHE_INVALID_CHANNEL, countKey);
 
-        invalidateLocalCache(request.getBizType(), request.getBizId());
-        sendLikeMessage(request, operateResult);
+        // 5. 发送Kafka消息（异步持久化到MySQL）
+        LikeKafkaMsg msg = new LikeKafkaMsg();
+        msg.setObjId(objId);
+        msg.setUserId(userId);
+        msg.setAction(newCount != null && newCount > 0 ? 1 : 0);
+        msg.setTimestamp(System.currentTimeMillis());
+        likeProducer.sendMsg(msg);
 
-        return buildOperateResponse(operateResult, likeCount);
+        return newCount;
     }
 
+    /**
+     * 获取指定对象的点赞数
+     * 优先从Caffeine缓存获取，失败则降级到MySQL
+     *
+     * @param objId 业务对象ID
+     * @return 点赞数量
+     */
     @Override
-    public LikeCountResponse getLikeCount(LikeCountRequest request) {
-        log.debug("开始处理获取点赞数量请求: {}", request);
-
-        validateCountRequest(request);
-        long count = getLikeCountWithCache(request.getBizType(), request.getBizId());
-
-        return LikeCountResponse.builder()
-                .success(true)
-                .likeCount(count)
-                .build();
-    }
-
-    @Override
-    public LikeCheckResponse checkUserLiked(LikeCheckRequest request) {
-        log.debug("开始处理检查点赞状态请求: {}", request);
-
-        validateCheckRequest(request);
-        boolean liked = checkUserLikedStatus(request.getBizType(), request.getBizId(), request.getUserId());
-
-        return LikeCheckResponse.builder()
-                .success(true)
-                .liked(liked)
-                .build();
-    }
-
-    private void validateOperateRequest(LikeOperateRequest request) {
-        if (ObjectUtils.isEmpty(request.getBizType())) {
-            throw BusinessException.invalidParam("bizType不能为空");
-        }
-        if (ObjectUtils.isEmpty(request.getBizId())) {
-            throw BusinessException.invalidParam("bizId不能为空");
-        }
-        if (ObjectUtils.isEmpty(request.getUserId())) {
-            throw BusinessException.invalidParam("userId不能为空");
-        }
-    }
-
-    private void validateCountRequest(LikeCountRequest request) {
-        if (ObjectUtils.isEmpty(request.getBizType())) {
-            throw BusinessException.invalidParam("bizType不能为空");
-        }
-        if (ObjectUtils.isEmpty(request.getBizId())) {
-            throw BusinessException.invalidParam("bizId不能为空");
-        }
-    }
-
-    private void validateCheckRequest(LikeCheckRequest request) {
-        if (ObjectUtils.isEmpty(request.getBizType())) {
-            throw BusinessException.invalidParam("bizType不能为空");
-        }
-        if (ObjectUtils.isEmpty(request.getBizId())) {
-            throw BusinessException.invalidParam("bizId不能为空");
-        }
-        if (ObjectUtils.isEmpty(request.getUserId())) {
-            throw BusinessException.invalidParam("userId不能为空");
-        }
-    }
-
-    private void checkRateLimit(Long userId) {
-        if (!redisRateLimiter.tryAcquire(userId, userLimitCount, userLimitSeconds)) {
-            throw BusinessException.rateLimit();
-        }
-    }
-
-    private Long executeLikeOperation(LikeOperateRequest request) {
-        Long result = redisLikeUtil.like(request.getBizType(), request.getBizId(), request.getUserId());
-        
-        if (ObjectUtils.isEmpty(result)) {
-            log.error("点赞操作失败: {}", request);
-            throw BusinessException.serviceError("操作失败");
-        }
-        
-        return result;
-    }
-
-    private long getLikeCountFromRedis(Integer bizType, Long bizId) {
-        return redisLikeUtil.getLikeCount(bizType, bizId);
-    }
-
-    private long getLikeCountWithCache(Integer bizType, Long bizId) {
-        String cacheKey = buildCacheKey(bizType, bizId);
-        String emptyKey = RedisConfig.buildEmptyValueKey(bizType, bizId);
-
-        Long count = likeCountCache.getIfPresent(cacheKey);
-        if (!ObjectUtils.isEmpty(count)) {
-            log.debug("从本地缓存获取点赞数: {}", count);
-            return count;
-        }
-
-        if (!ObjectUtils.isEmpty(emptyValueCache.getIfPresent(emptyKey))) {
-            return 0;
-        }
-
-        long redisCount = redisLikeUtil.getLikeCount(bizType, bizId);
-        
-        if (redisCount > 0) {
-            likeCountCache.put(cacheKey, redisCount);
-        } else {
-            emptyValueCache.put(emptyKey, true);
-        }
-
-        return redisCount;
-    }
-
-    private boolean checkUserLikedStatus(Integer bizType, Long bizId, Long userId) {
-        return redisLikeUtil.isLiked(bizType, bizId, userId);
-    }
-
-    private void invalidateLocalCache(Integer bizType, Long bizId) {
-        String cacheKey = buildCacheKey(bizType, bizId);
-        likeCountCache.invalidate(cacheKey);
-        emptyValueCache.invalidate(RedisConfig.buildEmptyValueKey(bizType, bizId));
-        log.debug("本地缓存已失效: {}", cacheKey);
-    }
-
-    private void sendLikeMessage(LikeOperateRequest request, Long operateResult) {
+    public Long getLikeCount(Long objId) {
+        String countKey = String.format(RedisKeyConst.LIKE_COUNT_KEY, objId);
         try {
-            LikeMqMsg mqMsg = LikeMqMsg.builder()
-                    .bizType(request.getBizType())
-                    .bizId(request.getBizId())
-                    .userId(request.getUserId())
-                    .operateType(operateResult == LikeConstant.OP_RESULT_LIKE 
-                            ? LikeConstant.OPERATE_TYPE_LIKE 
-                            : LikeConstant.OPERATE_TYPE_CANCEL)
-                    .operateTs(System.currentTimeMillis())
-                    .build();
-
-            kafkaProducerService.sendMsg(mqMsg);
-            log.debug("Kafka消息发送成功: {}", mqMsg);
+            return likeCountCache.get(countKey);
         } catch (Exception e) {
-            log.error("Kafka消息发送失败: {}", e.getMessage());
+            log.warn("获取点赞数缓存失败，降级到MySQL: {}", e.getMessage());
+            return recordMapper.countLikeByObjId(objId);
         }
     }
 
-    private LikeOperateResponse buildOperateResponse(Long operateResult, long likeCount) {
-        boolean liked = operateResult == LikeConstant.OP_RESULT_LIKE;
-        
-        log.info("点赞操作完成: liked={}, likeCount={}", liked, likeCount);
-        
-        return LikeOperateResponse.builder()
-                .success(true)
-                .liked(liked)
-                .likeCount(likeCount)
-                .build();
-    }
-
-    private String buildCacheKey(Integer bizType, Long bizId) {
-        return bizType + ":" + bizId;
+    /**
+     * 检查用户是否已点赞指定对象
+     * 优先从Redis获取，失败则降级到MySQL
+     *
+     * @param objId 业务对象ID
+     * @param userId 用户ID
+     * @return true-已点赞，false-未点赞
+     */
+    @Override
+    public Boolean checkUserLiked(Long objId, Long userId) {
+        int shardIdx = shardUtil.getShardIndex(userId);
+        String setKey = String.format(RedisKeyConst.LIKE_SET_KEY, objId, shardIdx);
+        try {
+            Boolean exist = redisTemplate.opsForSet().isMember(setKey, userId);
+            return exist != null && exist;
+        } catch (Exception e) {
+            log.warn("检查用户点赞状态缓存失败，降级到MySQL: {}", e.getMessage());
+            Integer status = recordMapper.getUserLikeStatus(objId, userId);
+            return status != null && status == 1;
+        }
     }
 }

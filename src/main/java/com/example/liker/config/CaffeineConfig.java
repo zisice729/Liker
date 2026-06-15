@@ -1,46 +1,38 @@
-
 package com.example.liker.config;
 
-import com.github.benmanes.caffeine.cache.Cache;
+import com.example.liker.constant.CommonConst;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import org.springframework.beans.factory.annotation.Value;
+import com.github.benmanes.caffeine.cache.LoadingCache;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.core.RedisTemplate;
 
 import java.util.concurrent.TimeUnit;
 
 /**
  * Caffeine本地缓存配置类
+ * 配置用于缓存点赞数的本地缓存实例
  */
 @Configuration
 public class CaffeineConfig {
 
-    @Value("${liker.cache.caffeine.max-size:100000}")
-    private int maxSize;
-
-    @Value("${liker.cache.caffeine.expire-after-write-ms:100}")
-    private int expireAfterWriteMs;
-
     /**
-     * 点赞数量缓存
+     * 配置点赞数本地缓存
+     * - 写入后5秒过期
+     * - 最大容量100000条
+     * - 自动从Redis加载数据
+     *
+     * @param redisTemplate Redis操作模板
+     * @return LoadingCache实例
      */
-    @Bean("likeCountCache")
-    public Cache<String, Long> likeCountCache() {
+    @Bean
+    public LoadingCache<String, Long> likeCountCache(RedisTemplate<String, Object> redisTemplate) {
         return Caffeine.newBuilder()
-                .maximumSize(maxSize)
-                .expireAfterWrite(expireAfterWriteMs, TimeUnit.MILLISECONDS)
-                .recordStats()
-                .build();
-    }
-
-    /**
-     * 空值缓存（防穿透）
-     */
-    @Bean("emptyValueCache")
-    public Cache<String, Boolean> emptyValueCache(@Value("${liker.cache.caffeine.empty-value-expire-minutes:5}") int expireMinutes) {
-        return Caffeine.newBuilder()
-                .maximumSize(10000)
-                .expireAfterWrite(expireMinutes, TimeUnit.MINUTES)
-                .build();
+                .expireAfterWrite(CommonConst.CAFFEINE_EXPIRE, TimeUnit.SECONDS)
+                .maximumSize(100000)
+                .build(key -> {
+                    Object val = redisTemplate.opsForValue().get(key);
+                    return val == null ? 0L : Long.parseLong(val.toString());
+                });
     }
 }

@@ -1,36 +1,34 @@
-
 package com.example.liker.service;
-
-import com.example.liker.dto.request.LikeCheckRequest;
-import com.example.liker.dto.request.LikeCountRequest;
-import com.example.liker.dto.request.LikeOperateRequest;
-import com.example.liker.dto.response.LikeCheckResponse;
-import com.example.liker.dto.response.LikeCountResponse;
-import com.example.liker.dto.response.LikeOperateResponse;
 
 /**
  * 点赞服务接口
+ * 定义点赞相关的业务操作
  */
 public interface LikeService {
 
     /**
      * 执行点赞/取消点赞操作
-     * @param request 请求参数
-     * @return 操作结果
+     *
+     * @param objId 业务对象ID（文章/评论）
+     * @param userId 用户ID
+     * @return 最新点赞数
      */
-    LikeOperateResponse doLike(LikeOperateRequest request);
+    Long operateLike(Long objId, Long userId);
 
     /**
-     * 获取点赞数量
-     * @param request 请求参数
+     * 获取指定对象的点赞数
+     *
+     * @param objId 业务对象ID
      * @return 点赞数量
      */
-    LikeCountResponse getLikeCount(LikeCountRequest request);
+    Long getLikeCount(Long objId);
 
     /**
-     * 检查用户是否已点赞
-     * @param request 请求参数
-     * @return 点赞状态
+     * 检查用户是否已点赞指定对象
+     *
+     * @param objId 业务对象ID
+     * @param userId 用户ID
+     * @return true-已点赞，false-未点赞
      */
-    LikeCheckResponse checkUserLiked(LikeCheckRequest request);
+    Boolean checkUserLiked(Long objId, Long userId);
 }
